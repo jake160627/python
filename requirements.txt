@@ -1,0 +1,418 @@
+from flask import Flask, request, jsonify
+import cv2
+import mediapipe as mp
+import numpy as np
+from PIL import Image
+import io
+import base64
+import math
+import logging
+
+# Configuração básica
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# CORS simples
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+# Inicialização do MediaPipe
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(
+    static_image_mode=True,
+    model_complexity=2,
+    enable_segmentation=False,
+    min_detection_confidence=0.5
+)
+
+class ProportionAnalyzer:
+    """Classe principal para análise de proporções corporais"""
+    
+    def __init__(self):
+        self.ideal_proportions = {
+            'head_to_body': 8.0,
+            'shoulder_to_hip': 1.5,
+            'leg_to_torso': 1.4,
+            'arm_span_to_height': 1.0,
+        }
+
+    def calculate_distance(self, point1, point2):
+        """Calcula distância entre dois pontos"""
+        return math.sqrt((point1['x'] - point2['x'])**2 + (point1['y'] - point2['y'])**2)
+
+    def get_midpoint(self, point1, point2):
+        """Calcula ponto médio"""
+        return {
+            'x': (point1['x'] + point2['x']) / 2,
+            'y': (point1['y'] + point2['y']) / 2
+        }
+
+    def analyze_proportions(self, landmarks):
+        """Análise principal das proporções"""
+        try:
+            results = {
+                'proportions': [],
+                'overall_score': 0,
+                'recommendations': []
+            }
+
+            # Pontos essenciais
+            nose = landmarks.get(0)
+            left_shoulder = landmarks.get(11)
+            right_shoulder = landmarks.get(12)
+            left_hip = landmarks.get(23)
+            right_hip = landmarks.get(24)
+            left_ankle = landmarks.get(27)
+            right_ankle = landmarks.get(28)
+            left_wrist = landmarks.get(15)
+            right_wrist = landmarks.get(16)
+
+            if not all([nose, left_shoulder, right_shoulder, left_hip, right_hip]):
+                raise ValueError("Pontos essenciais não detectados")
+
+            # 1. Proporção cabeça/corpo
+            head_bottom = self.get_midpoint(left_shoulder, right_shoulder)
+            body_bottom = self.get_midpoint(
+                left_ankle if left_ankle else left_hip,
+                right_ankle if right_ankle else right_hip
+            )
+            
+            head_height = self.calculate_distance(nose, head_bottom)
+            total_height = self.calculate_distance(nose, body_bottom)
+            
+            if head_height > 0:
+                head_to_body_ratio = total_height / head_height
+                head_score = self._score_proportion(head_to_body_ratio, self.ideal_proportions['head_to_body'], 1.0)
+                
+                results['proportions'].append({
+                    'name': 'Proporção Cabeça/Corpo',
+                    'value': f'1:{head_to_body_ratio:.1f}',
+                    'ideal': '1:8.0',
+                    'score': head_score,
+                    'status': self._get_status(head_score)
+                })
+
+            # 2. Proporção ombros/quadris
+            shoulder_width = self.calculate_distance(left_shoulder, right_shoulder)
+            hip_width = self.calculate_distance(left_hip, right_hip)
+            
+            if hip_width > 0:
+                shoulder_hip_ratio = shoulder_width / hip_width
+                shoulder_score = self._score_proportion(shoulder_hip_ratio, self.ideal_proportions['shoulder_to_hip'], 0.3)
+                
+                results['proportions'].append({
+                    'name': 'Proporção Ombros/Quadris',
+                    'value': f'{shoulder_hip_ratio:.2f}',
+                    'ideal': '1.50',
+                    'score': shoulder_score,
+                    'status': self._get_status(shoulder_score)
+                })
+
+            # 3. Proporção pernas/torso
+            hip_center = self.get_midpoint(left_hip, right_hip)
+            torso_height = self.calculate_distance(head_bottom, hip_center)
+            leg_height = self.calculate_distance(hip_center, body_bottom)
+            
+            if torso_height > 0:
+                leg_torso_ratio = leg_height / torso_height
+                leg_score = self._score_proportion(leg_torso_ratio, self.ideal_proportions['leg_to_torso'], 0.3)
+                
+                results['proportions'].append({
+                    'name': 'Proporção Pernas/Torso',
+                    'value': f'{leg_torso_ratio:.2f}',
+                    'ideal': '1.40',
+                    'score': leg_score,
+                    'status': self._get_status(leg_score)
+                })
+
+            # 4. Envergadura
+            if left_wrist and right_wrist:
+                arm_span = self.calculate_distance(left_wrist, right_wrist)
+                arm_span_ratio = arm_span / total_height
+                arm_score = self._score_proportion(arm_span_ratio, self.ideal_proportions['arm_span_to_height'], 0.1)
+                
+                results['proportions'].append({
+                    'name': 'Envergadura/Altura',
+                    'value': f'{arm_span_ratio:.2f}',
+                    'ideal': '1.00',
+                    'score': arm_score,
+                    'status': self._get_status(arm_score)
+                })
+
+            # Score geral
+            scores = [p['score'] for p in results['proportions']]
+            results['overall_score'] = sum(scores) / len(scores) if scores else 0
+
+            # Recomendações
+            results['recommendations'] = self._generate_recommendations(results['proportions'])
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Erro na análise: {str(e)}")
+            raise
+
+    def _score_proportion(self, actual, ideal, tolerance):
+        """Calcula score de 0-100"""
+        difference = abs(actual - ideal)
+        score = max(0, 100 - (difference / tolerance) * 100)
+        return min(100, score)
+
+    def _get_status(self, score):
+        """Status baseado no score"""
+        if score >= 80:
+            return 'excelente'
+        elif score >= 60:
+            return 'bom'
+        else:
+            return 'precisa_melhorar'
+
+    def _generate_recommendations(self, proportions):
+        """Gera recomendações"""
+        recommendations = []
+        
+        for prop in proportions:
+            if prop['score'] < 60:
+                if 'Cabeça/Corpo' in prop['name']:
+                    recommendations.append("Trabalhe na postura para melhor alinhamento")
+                elif 'Ombros/Quadris' in prop['name']:
+                    recommendations.append("Fortaleça os ombros")
+                elif 'Pernas/Torso' in prop['name']:
+                    recommendations.append("Alongue e fortaleça as pernas")
+                elif 'Envergadura' in prop['name']:
+                    recommendations.append("Trabalhe a flexibilidade dos braços")
+        
+        if not recommendations:
+            recommendations.append("Excelente! Suas proporções estão ótimas!")
+        
+        return recommendations
+
+# Instância do analisador
+analyzer = ProportionAnalyzer()
+
+@app.route('/analisar', methods=['POST'])
+def analisar_proporcoes():
+    """Endpoint principal para análise"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'erro': 'Nenhuma imagem encontrada'}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'erro': 'Nenhum arquivo selecionado'}), 400
+
+        # Processar imagem
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        image_np = np.array(image)
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+        # Detectar pose
+        results = pose.process(image_bgr)
+        
+        if not results.pose_landmarks:
+            return jsonify({'erro': 'Nenhuma pose detectada na imagem'}), 400
+
+        # Extrair landmarks
+        landmarks = {}
+        for i, landmark in enumerate(results.pose_landmarks.landmark):
+            landmarks[i] = {
+                'x': landmark.x,
+                'y': landmark.y,
+                'z': landmark.z,
+                'visibility': landmark.visibility
+            }
+
+        # Analisar proporções
+        analysis = analyzer.analyze_proportions(landmarks)
+
+        return jsonify({
+            'status': 'sucesso',
+            'analise': analysis,
+            'total_pontos': len(landmarks)
+        })
+
+    except Exception as e:
+        logger.error(f"Erro: {str(e)}")
+        return jsonify({'erro': f'Erro interno: {str(e)}'}), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Status da API"""
+    return jsonify({
+        'status': 'funcionando',
+        'message': 'API de análise de proporções ativa'
+    })
+
+@app.route('/options', methods=['OPTIONS'])
+def handle_options():
+    return '', 204
+
+if __name__ == '__main__':
+    print("🚀 API de Análise de Proporções Iniciada")
+    app.run(host='0.0.0.0', port=5000, debug=True)
+
+
+
+    # FUNCIONALIDADES EXTRAS - Use apenas se precisar
+
+# 1. VISUALIZAÇÃO COM IMAGENS ANOTADAS
+class VisualEnhancer:
+    """Para adicionar visualizações às análises"""
+    
+    def __init__(self):
+        self.colors = {
+            'excelente': (0, 255, 0),
+            'bom': (255, 165, 0), 
+            'precisa_melhorar': (255, 0, 0),
+            'landmark': (0, 255, 255)
+        }
+
+    def create_annotated_image(self, image_np, landmarks, analysis):
+        """Cria imagem com pontos marcados"""
+        annotated = image_np.copy()
+        height, width = annotated.shape[:2]
+        
+        # Marcar pontos principais
+        key_points = {
+            'nariz': 0, 'ombro_esq': 11, 'ombro_dir': 12,
+            'quadril_esq': 23, 'quadril_dir': 24
+        }
+        
+        for name, idx in key_points.items():
+            if idx in landmarks:
+                x = int(landmarks[idx]['x'] * width)
+                y = int(landmarks[idx]['y'] * height)
+                cv2.circle(annotated, (x, y), 8, self.colors['landmark'], -1)
+        
+        # Adicionar texto com resultados
+        y_pos = 30
+        for prop in analysis['proportions']:
+            color = self.colors[prop['status']]
+            text = f"{prop['name']}: {prop['value']} - {prop['status']}"
+            cv2.putText(annotated, text, (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            y_pos += 25
+        
+        return annotated
+
+# 2. ENDPOINTS DE DEBUG
+@app.route('/debug', methods=['POST'])
+def debug_analysis():
+    """Para testar e debugar a análise"""
+    try:
+        # Mesmo processamento básico
+        file = request.files['image']
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        debug_info = {
+            'arquivo': {
+                'nome': file.filename,
+                'tamanho': len(image_bytes),
+                'formato': image.format
+            },
+            'processamento': 'ok'
+        }
+        
+        return jsonify(debug_info)
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+# 3. PÁGINA HTML SIMPLES
+@app.route('/index.html')
+def home():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Análise de Proporções</title>
+    </head>
+    <body>
+        <h1>API de Análise de Proporções Corporais</h1>
+        <p>Endpoints disponíveis:</p>
+        <ul>
+            <li>POST /analisar - Análise principal</li>
+            <li>GET /health - Status da API</li>
+        </ul>
+    </body>
+    </html>
+    """
+
+# 4. REFERÊNCIAS VISUAIS
+def create_reference_images():
+    """Cria imagens de referência das proporções ideais"""
+    # Imagem simples mostrando proporção 1:8
+    ref_img = np.ones((400, 200, 3), dtype=np.uint8) * 255
+    
+    # Desenhar linhas de proporção
+    head_size = 40
+    for i in range(8):
+        y = 50 + i * head_size
+        cv2.line(ref_img, (50, y), (150, y), (100, 100, 100), 1)
+        cv2.putText(ref_img, str(i+1), (155, y+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+    
+    return ref_img
+
+# 5. EXTRAÇÃO APENAS DE LANDMARKS
+@app.route('/landmarks', methods=['POST'])
+def extract_landmarks():
+    """Extrai apenas os pontos, sem análise"""
+    try:
+        file = request.files['image']
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        image_np = np.array(image)
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        
+        results = pose.process(image_bgr)
+        
+        if not results.pose_landmarks:
+            return jsonify({'erro': 'Pose não detectada'}), 400
+        
+        landmarks = {}
+        for i, landmark in enumerate(results.pose_landmarks.landmark):
+            landmarks[i] = {
+                'x': landmark.x,
+                'y': landmark.y,
+                'z': landmark.z,
+                'visibility': landmark.visibility
+            }
+        
+        return jsonify({
+            'landmarks': landmarks,
+            'total': len(landmarks)
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+# 6. TESTE SIMPLES
+@app.route('/test', methods=['POST'])
+def test_upload():
+    """Testa se o upload está funcionando"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'erro': 'Sem imagem'}), 400
+        
+        file = request.files['image']
+        return jsonify({
+            'status': 'ok',
+            'arquivo': file.filename,
+            'tamanho': len(file.read())
+        })
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
