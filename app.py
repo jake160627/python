@@ -1,5 +1,5 @@
 #arquivo app.py
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, render_template, request, jsonify, render_template_string
 import cv2
 import numpy as np
 from PIL import Image
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from numba import jit
 import torch
 import json
-from desenhou import IdealBodyVisualizer, generate_ideal_body_visualization
+from desenhou import IdealBodyVisualizer, StickFigureGenerator
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import silhouette_score
@@ -353,31 +353,6 @@ class SuperOptimizedAnalyzer:
             },
             'recommendations': self._generate_recommendations_optimized(proportions, ai_analysis)
         }
-@app.route('/visualizar', methods=['POST'])
-def visualizar_corpo_ideal():
-    """Endpoint para gerar a visualização SVG e gráfico do corpo ideal com base nas proporções"""
-    try:
-        data = request.get_json()
-        if not data or 'proporcoes' not in data:
-            return jsonify({'erro': 'Dados de proporções ausentes'}), 400
-
-        proporcoes_usuario = data['proporcoes']
-        visualizer = IdealBodyVisualizer()
-        resultado = visualizer.generate_body_analysis_report(proporcoes_usuario, analysis_result=None)
-
-        return jsonify({
-            'status': 'sucesso',
-            'svg': resultado['ideal_body_svg'],
-            'grafico_base64': resultado['comparison_chart'],
-            'analise': resultado['detailed_analysis'],
-            'sugestoes': resultado['improvement_suggestions'],
-            'ideais': resultado['ideal_proportions']
-        })
-
-    except Exception as e:
-        logger.error(f"Erro ao gerar visualização: {str(e)}")
-        return jsonify({'erro': f'Erro interno: {str(e)}'}), 500
-
 
     def _analyze_single_proportion(self, key, value, ai_analysis):
         """Analisar uma proporção individual"""
@@ -409,19 +384,20 @@ def visualizar_corpo_ideal():
     def _format_proportion_result(self, prop):
         """Formatar resultado da proporção"""
         name_map = {
-            'head_body': 'Cabeça/Corpo', 'shoulder_hip': 'Ombros/Quadris',
-            'leg_torso': 'Pernas/Torso', 'arm_span': 'Envergadura/Altura',
-            'waist_hip': 'Cintura/Quadris', 'shoulder_width': 'Largura Ombros',
-            'leg_length': 'Comprimento Pernas'
+             'head_body': 'Cabeça/Corpo', 'shoulder_hip': 'Ombros/Quadris',
+        'leg_torso': 'Pernas/Torso', 'arm_span': 'Envergadura/Altura',
+        'waist_hip': 'Cintura/Quadris', 'shoulder_width': 'Largura Ombros',
+        'leg_length': 'Comprimento Pernas'
         }
 
         return {
             'name': name_map.get(prop['key'], prop['key']),
-            'value': f"{prop['value']:.2f}",
-            'ideal': f"{prop['ideal']:.2f}",
-            'score': prop['score'],
-            'status': prop['status'],
-            'weight': self.config.weights.get(prop['key'], 1.0)
+        'value': prop['value'],  # REMOVER o f"{prop['value']:.2f}" para manter float
+        'ideal': prop['ideal'],   # REMOVER o f"{prop['ideal']:.2f}" para manter float
+        'score': prop['score'],
+        'status': prop['status'],
+        'weight': self.config.weights.get(prop['key'], 1.0),
+        'key': prop['key']  # ADICIONAR a chave original
         }
 
     def _classify_body_type_optimized(self, ai_analysis):
@@ -464,315 +440,21 @@ def visualizar_corpo_ideal():
 # Instanciar detectores otimizados
 pose_detector = OptimizedPoseDetector()
 analyzer = SuperOptimizedAnalyzer()
+# Instanciar detectores otimizados
+pose_detector = OptimizedPoseDetector()
+analyzer = SuperOptimizedAnalyzer()
+# ADICIONAR ESTAS LINHAS:
+stick_generator = StickFigureGenerator()
+ideal_visualizer = IdealBodyVisualizer()
 
-@app.route('/index.html')
+
+@app.route('/')
 def home():
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 Análise Super Otimizada - OpenCV + IA</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; display: flex; align-items: center; justify-content: center;
-        }
-        .container {
-            background: rgba(255,255,255,0.95); border-radius: 20px; padding: 40px;
-            box-shadow: 0 25px 50px rgba(0,0,0,0.15); max-width: 800px; width: 95%;
-            backdrop-filter: blur(10px);
-        }
-        h1 { 
-            text-align: center; color: #2d3748; margin-bottom: 30px; 
-            font-size: 2.8em; font-weight: 700;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .subtitle {
-            text-align: center; color: #718096; margin-bottom: 30px;
-            font-size: 1.1em; font-weight: 500;
-        }
-        .upload-zone {
-            border: 3px dashed #cbd5e0; border-radius: 15px; padding: 40px;
-            text-align: center; margin: 30px 0; cursor: pointer; 
-            transition: all 0.3s ease; position: relative; overflow: hidden;
-        }
-        .upload-zone:hover { 
-            border-color: #667eea; transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.1);
-        }
-        input[type="file"] { display: none; }
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; padding: 15px 30px; border-radius: 50px;
-            cursor: pointer; font-size: 16px; width: 100%; margin-top: 20px;
-            transition: all 0.3s ease; font-weight: 600;
-        }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-        .preview { margin: 20px 0; text-align: center; }
-        .preview img { max-width: 100%; max-height: 400px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-        .results { margin-top: 30px; padding: 25px; background: #f8fafc; border-radius: 15px; }
-        .result-item { 
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 15px; margin: 10px 0; background: white; border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        .result-info { flex: 1; }
-        .result-stats { text-align: right; }
-        .status { 
-            padding: 6px 12px; border-radius: 20px; font-size: 12px; 
-            font-weight: 700; text-transform: uppercase; margin-bottom: 5px;
-        }
-        .status.excelente { background: #c6f6d5; color: #22543d; }
-        .status.bom { background: #feebc8; color: #c05621; }
-        .status.regular { background: #fed7aa; color: #dd6b20; }
-        .status.precisa_melhorar { background: #fed7d7; color: #c53030; }
-        .score { font-size: 3em; font-weight: 900; color: #667eea; text-align: center; margin: 20px 0; }
-        .ai-insights { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; padding: 20px; border-radius: 15px; margin: 20px 0;
-        }
-        .ai-insights h3 { margin-bottom: 15px; }
-        .insight-item { margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; }
-        .loading { display: none; text-align: center; margin: 20px 0; }
-        .spinner { 
-            border: 4px solid #f3f3f3; border-top: 4px solid #667eea; 
-            border-radius: 50%; width: 50px; height: 50px; 
-            animation: spin 1s linear infinite; margin: 0 auto;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .error { background: #fed7d7; color: #c53030; padding: 15px; border-radius: 10px; margin: 20px 0; text-align: center; }
-        .recommendations { background: #e6fffa; padding: 20px; border-radius: 15px; margin: 20px 0; }
-        .recommendations h3 { color: #234e52; margin-bottom: 15px; }
-        .recommendations ul { list-style: none; }
-        .recommendations li { margin: 8px 0; padding: 8px; background: rgba(56, 178, 172, 0.1); border-radius: 8px; }
-        .recommendations li:before { content: '🚀'; margin-right: 10px; }
-        .performance-badge { 
-            display: inline-block; background: #48bb78; color: white; padding: 4px 8px; 
-            border-radius: 12px; font-size: 12px; margin-left: 10px;
-        }
-        .performance-stats {
-            background: #f0f8ff; padding: 15px; border-radius: 10px; margin: 20px 0;
-            border-left: 4px solid #667eea;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 Análise Super Otimizada</h1>
-        <div class="subtitle">
-            ⚡ OpenCV + ML Otimizado + Cache + Paralelização
-            <span class="performance-badge">Ultra Rápido</span>
-        </div>
-        
-        <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
-            <div style="font-size: 1.2em; font-weight: 600;">📸 Clique ou arraste uma imagem aqui</div>
-            <div style="font-size: 14px; color: #718096; margin-top: 10px;">
-                ⚡ Processamento Super Otimizado<br>
-                🎯 Cache + Paralelização + Numba JIT
-            </div>
-        </div>
-        
-        <input type="file" id="fileInput" accept="image/*">
-        <div class="preview" id="preview"></div>
-        
-        <button class="btn" id="analyzeBtn" onclick="analyzeImage()" disabled>
-            🚀 Analisar Super Rápido
-        </button>
-        
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <div style="margin-top: 15px; font-weight: 600;">Processando ultra-rápido...</div>
-        </div>
-        
-        <div id="results"></div>
-    </div>
-
-    <script>
-        let selectedFile = null;
-        
-        document.getElementById('fileInput').addEventListener('change', function() {
-            const file = this.files[0];
-            if (file) {
-                selectedFile = file;
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    document.getElementById('preview').innerHTML = `<img src="${e.target.result}" alt="Preview">`;
-                    document.getElementById('analyzeBtn').disabled = false;
-                };
-                reader.readAsDataURL(file);
-            }
-        });
-        
-        async function analyzeImage() {
-            if (!selectedFile) return;
-            
-            const formData = new FormData();
-            formData.append('image', selectedFile);
-            
-            const analyzeBtn = document.getElementById('analyzeBtn');
-            const loading = document.getElementById('loading');
-            const results = document.getElementById('results');
-            
-            analyzeBtn.disabled = true;
-            loading.style.display = 'block';
-            results.innerHTML = '';
-            
-            const startTime = performance.now();
-            
-           try {
-                const response = await fetch('/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                const processingTime = ((performance.now() - startTime) / 1000).toFixed(2);
-                
-                if (data.success) {
-                    displayResults(data.result, processingTime);
-                } else {
-                    displayError(data.error);
-                }
-                
-            } catch (error) {
-                displayError(`Erro na análise: ${error.message}`);
-            } finally {
-                loading.style.display = 'none';
-                analyzeBtn.disabled = false;
-            }
-        }
-        
-        function displayResults(result, processingTime) {
-            const resultsDiv = document.getElementById('results');
-            
-            let html = `
-                <div class="performance-stats">
-                    <h3>⚡ Performance Ultra Otimizada</h3>
-                    <div>🚀 Tempo de processamento: <strong>${processingTime}s</strong></div>
-                    <div>💾 Cache: ${result.cache_hit ? 'HIT' : 'MISS'}</div>
-                    <div>🔧 Paralelização: Ativada</div>
-                </div>
-                
-                <div class="score">
-                    ${result.overall_score.toFixed(1)}
-                    <div style="font-size: 0.3em; color: #718096;">SCORE GERAL</div>
-                </div>
-                
-                <div class="ai-insights">
-                    <h3>🤖 Insights de IA</h3>
-                    <div class="insight-item">
-                        <strong>Classificação:</strong> ${result.ai_insights.classification}
-                    </div>
-                    <div class="insight-item">
-                        <strong>Simetria:</strong> ${result.ai_insights.symmetry_score.toFixed(1)}%
-                    </div>
-                    <div class="insight-item">
-                        <strong>Harmonia:</strong> ${result.ai_insights.harmony_score.toFixed(1)}%
-                    </div>
-                    <div class="insight-item">
-                        <strong>Distância do Ideal:</strong> ${result.ai_insights.distance_from_ideal.toFixed(3)}
-                    </div>
-                </div>
-                
-                <div class="results">
-                    <h3>📊 Análise Detalhada das Proporções</h3>
-            `;
-            
-            result.proportions.forEach(prop => {
-                html += `
-                    <div class="result-item">
-                        <div class="result-info">
-                            <div style="font-weight: 600; margin-bottom: 5px;">${prop.name}</div>
-                            <div class="status ${prop.status}">${prop.status.replace('_', ' ')}</div>
-                        </div>
-                        <div class="result-stats">
-                            <div style="font-size: 1.2em; font-weight: bold;">${prop.score.toFixed(1)}</div>
-                            <div style="font-size: 0.9em; color: #718096;">
-                                ${prop.value} / ${prop.ideal} (peso: ${prop.weight})
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            html += `
-                </div>
-                
-                <div class="recommendations">
-                    <h3>🎯 Recomendações Personalizadas</h3>
-                    <ul>
-            `;
-            
-            result.recommendations.forEach(rec => {
-                html += `<li>${rec}</li>`;
-            });
-            
-            html += `
-                    </ul>
-                </div>
-            `;
-            
-            resultsDiv.innerHTML = html;
-        }
-        
-        function displayError(error) {
-            const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = `
-                <div class="error">
-                    <h3>❌ Erro na Análise</h3>
-                    <p>${error}</p>
-                    <p>Tente novamente com uma imagem diferente.</p>
-                </div>
-            `;
-        }
-        
-        // Drag and drop functionality
-        const uploadZone = document.querySelector('.upload-zone');
-        
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.style.backgroundColor = '#f0f8ff';
-            uploadZone.style.transform = 'scale(1.02)';
-        });
-        
-        uploadZone.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            uploadZone.style.backgroundColor = '';
-            uploadZone.style.transform = '';
-        });
-        
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.style.backgroundColor = '';
-            uploadZone.style.transform = '';
-            
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                const file = files[0];
-                if (file.type.startsWith('image/')) {
-                    selectedFile = file;
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        document.getElementById('preview').innerHTML = `<img src="${e.target.result}" alt="Preview">`;
-                        document.getElementById('analyzeBtn').disabled = false;
-                    };
-                    reader.readAsDataURL(file);
-                }
-            }
-        });
-    </script>
-</body>
-</html>
-    """)
+    return render_template('index.html')
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
+    
     """Endpoint super otimizado para análise"""
     try:
         start_time = time.time()
@@ -819,11 +501,78 @@ def analyze():
     except Exception as e:
         logger.error(f"Erro na análise: {str(e)}")
         return jsonify({'success': False, 'error': str(e)})
+    # Análise super otimizada
+        result = analyzer.analyze_proportions_advanced(keypoints)
+        
+        # ADICIONAR ESTE BLOCO:
+        # Extrair proporções para o desenhou.py
+        proporcoes_usuario = {}
+        for prop in result.get('proportions', []):
+            prop_key = prop.get('name', '').lower().replace('/', '_').replace(' ', '_')
+            if 'cabeça_corpo' in prop_key:
+                proporcoes_usuario['head_body'] = float(prop.get('value', 0))
+            elif 'ombros_quadris' in prop_key:
+                proporcoes_usuario['shoulder_hip'] = float(prop.get('value', 0))
+            elif 'pernas_torso' in prop_key:
+                proporcoes_usuario['leg_torso'] = float(prop.get('value', 0))
+            elif 'envergadura_altura' in prop_key:
+                proporcoes_usuario['arm_span'] = float(prop.get('value', 0))
+            elif 'largura_ombros' in prop_key:
+                proporcoes_usuario['shoulder_width'] = float(prop.get('value', 0))
+            elif 'comprimento_pernas' in prop_key:
+                proporcoes_usuario['leg_length'] = float(prop.get('value', 0))
+        
+        # Gerar visualizações
+        try:
+            # Figura de palito proporcional
+            stick_figure_png = stick_generator.create_proportional_stick_figure(proporcoes_usuario)
+            result['stick_figure'] = stick_figure_png
+            
+            # Corpo ideal SVG
+            ideal_body_svg = ideal_visualizer.generate_ideal_body_svg(proporcoes_usuario)
+            result['ideal_body_svg'] = ideal_body_svg
+            
+            # Gráfico comparativo
+            comparison_chart = ideal_visualizer.generate_comparison_chart(proporcoes_usuario)
+            result['comparison_chart'] = comparison_chart
+            
+        except Exception as e:
+            logger.error(f"Erro ao gerar visualizações: {str(e)}")
+            result['stick_figure'] = None
+            result['ideal_body_svg'] = None
+            result['comparison_chart'] = None
 
-# Instanciar detectores otimizados
-pose_detector = OptimizedPoseDetector()
-analyzer = SuperOptimizedAnalyzer()
+@app.route('/visualizar', methods=['POST'])
+@app.route('/visualizar', methods=['POST'])
+def visualizar_corpo_ideal():
+    """Endpoint para gerar a visualização SVG e gráfico do corpo ideal com base nas proporções"""
+    try:
+        data = request.get_json()
+        if not data or 'proporcoes' not in data:
+            return jsonify({'erro': 'Dados de proporções ausentes'}), 400
 
+        proporcoes_usuario = data['proporcoes']
+        
+        # Gerar todas as visualizações
+        resultado = ideal_visualizer.generate_body_analysis_report(proporcoes_usuario)
+        
+        # Gerar figura de palito também
+        stick_figure_png = stick_generator.create_proportional_stick_figure(proporcoes_usuario)
+
+        return jsonify({
+            'status': 'sucesso',
+            'svg': resultado['ideal_body_svg'],
+            'grafico_base64': resultado['comparison_chart'],
+            'stick_figure': stick_figure_png,
+            'analise': resultado['detailed_analysis'],
+            'sugestoes': resultado['improvement_suggestions'],
+            'ideais': resultado['ideal_proportions']
+        })
+
+    except Exception as e:
+        logger.error(f"Erro ao gerar visualização: {str(e)}")
+        return jsonify({'erro': f'Erro interno: {str(e)}'}), 500
+    
 if __name__ == '__main__':
     logger.info("🚀 Iniciando servidor super otimizado...")
     app.run(debug=True, host='0.0.0.0', port=5000)

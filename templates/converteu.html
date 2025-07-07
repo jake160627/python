@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Visualizador de Código Python</title>
+  <style>
+    body {
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+      font-family: 'Courier New', monospace;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 {
+      color: #00ff88;
+    }
+
+    input[type="file"] {
+      margin-bottom: 20px;
+    }
+
+    pre {
+      background: #2e2e2e;
+      padding: 20px;
+      border-radius: 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      box-shadow: 0 0 10px #00ff88;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>📂 Visualizador de Arquivo Python</h1>
+  <p>Selecione um arquivo <code>.py</code> que foi decompilado:</p>
+  <input type="file" id="fileInput" accept=".pyc">
+  <pre id="codeDisplay">O conteúdo aparecerá aqui...</pre>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const codeDisplay = document.getElementById("codeDisplay");
+
+    fileInput.addEventListener("change", function () {
+      const file = this.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        codeDisplay.textContent = e.target.result;
+      };
+      reader.readAsText(file);
+    });
+  </script>
+
+</body>
+</html>
